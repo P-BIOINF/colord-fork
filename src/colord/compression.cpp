@@ -285,6 +285,23 @@ ApproxSizes getApproxSizes(const CCompressorParams& params,
 	return res;
 }
 
+/**
+ * @brief Calculates the approximate sizes of various queues used in processing.
+ * @param is_fastq - flag indicating if the input data is in FASTQ format.
+ * @param edit_script_for_qual_queue_size - size of the edit script queue for quality scores.
+ * @param compressed_queue_size - size of the compressed queue.
+ * @param n_compression_threads - number of threads used for compression.
+ * @param mean_read_len - average length of the reads.
+ * @param maxCandidates - maximum number of candidates to consider during compression.
+ * @param verbose - flag to enable verbose output for debugging.
+ * @return The total approximate size of all queues in bytes.
+ *
+ * This function calculates the sizes of various queues (reads, qualities, headers,
+ * compressed data, and edit scripts) based on their respective sizes and the
+ * number of threads involved in processing. It also provides detailed output of
+ * the estimated sizes if verbose mode is enabled, assisting in debugging and
+ * resource allocation.
+ */
 uint64_t calcQueuesSize(bool is_fastq, uint32_t edit_script_for_qual_queue_size, uint32_t compressed_queue_size, uint32_t n_compression_threads, uint64_t mean_read_len, uint32_t maxCandidates, bool verbose)
 {
 	uint64_t reads_queue_bytes = (reads_queue_size // queue size
@@ -337,6 +354,25 @@ uint64_t calcQueuesSize(bool is_fastq, uint32_t edit_script_for_qual_queue_size,
 	return reads_queue_bytes + quals_queue_bytes + headers_queue_bytes + compress_queue_bytes + es_queue_bytes + es_queue_for_qual;
 }
 
+/**
+ * @brief Adjusts memory parameters for sparse mode based on input data characteristics.
+ *
+ * @param params - The compressor parameters containing configuration settings.
+ * @param filtered_kmers - The k-mer filter object containing filtered k-mer data.
+ * @param tot_kmers_counts - Total counts of k-mers processed.
+ * @param tot_n_reads - Total number of reads processed.
+ * @param n_ref_genome_pseudo_reads - Number of pseudo reads for the reference genome.
+ * @param mean_read_len - Average length of the reads.
+ * @param queuesApproxSize - Estimated total size of the queues in bytes.
+ * @param sparseMode_range - Reference to the range parameter for sparse mode.
+ * @param sparseMode_exponent - Reference to the exponent parameter for sparse mode.
+ * @param fill_factor_kmers_to_reads - Reference to the fill factor for k-mers to reads mapping.
+ *
+ * This function calculates the approximate memory usage based on various parameters
+ * and adjusts the configuration for sparse mode accordingly. It also provides
+ * verbose output for debugging, detailing the sizes of queues, filtered k-mers,
+ * reference reads, and the overall estimated memory requirements.
+ */
 void adjustMemorySparseMode(
 	const CCompressorParams& params,
 	const CKmerFilter& filtered_kmers,

@@ -407,6 +407,15 @@ public:
 		modulo_div = libdivide::divider<uint64_t>(modulo);
 	}
 
+	/**
+	 * @brief Encodes the compression data and pushes the results to the respective queues.
+	 *
+	 * This method processes compression packs retrieved from the queue, performing entropy
+	 * estimation and element processing for each pack. If the input format is FASTQ, it also
+	 * handles the encoding of quality scores by pushing the current encoded reads to the
+	 * `edit_script_for_qual_queue`. Finally, it marks the compression and quality queues as
+	 * completed once all packs have been processed.
+	 */
 	void Encode();
 
 	double GetWaitOnQueueTime()
