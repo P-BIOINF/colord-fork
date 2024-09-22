@@ -58,6 +58,16 @@ public:
 	explicit CReferenceGenome(const std::string& path, uint32_t overlap_size, bool calc_checksum, bool verbose);
 	explicit CReferenceGenome(CArchive& archive, uint32_t overlap_size, bool verbose);
 
+	/**
+	* @brief Stores reference sequences as reads in a specified file.
+	* @param path - the file path where the reference sequences will be stored.
+	* @param as_fastq - flag indicating whether to store sequences in FASTQ format (true) or FASTA format (false).
+	*
+	* This function writes reference sequences to a file, either in FASTA or FASTQ format,
+	* depending on the `as_fastq` parameter. It handles the writing of sequence data,
+	* including optional quality scores if storing in FASTQ format. If the output file
+	* cannot be opened, an error message is displayed and the program exits.
+	*/
 	void Store(const std::string& path, bool as_fastq);
 
 	void Store(CArchive& archive);

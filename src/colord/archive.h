@@ -73,7 +73,13 @@ public:
 	bool Open(string file_name);
 	bool Close();
 
+	/**
+	* @brief Registers a new stream in the archive.
+	* @param stream_name - the name of the stream to be registered.
+	* @return Returns the identifier of the registered stream.
+	*/
 	int RegisterStream(string stream_name);
+
 	int GetStreamId(string stream_name);
 	
 	size_t GetStreamPackedSize(int stream_id)

@@ -39,6 +39,19 @@
 
 static std::mutex mtx_cerr;
 
+/**
+ * @brief Adjusts k-mer and anchor lengths based on file properties.
+ * @param kmerLen - reference to the k-mer length to be adjusted.
+ * @param anchorLen - reference to the anchor length to be adjusted.
+ * @param is_gzip_input - flag indicating if the input file is gzipped.
+ * @param is_fastq - flag indicating if the input file is in FASTQ format.
+ * @param filePath - path to the input file.
+ *
+ * This function adjusts the k-mer and anchor lengths based on the estimated
+ * base count calculated from the input file size and format. If the
+ * lengths are already set, it does nothing. The adjustments are made based
+ * on predefined thresholds for base counts.
+ */
 void adjustKmerAndAnchorLen(uint32_t& kmerLen, uint32_t& anchorLen, bool is_gzip_input, bool is_fastq, const std::string& filePath)
 {
 	if (kmerLen && anchorLen) 
@@ -162,6 +175,18 @@ public:
 	}
 };
 
+/**
+ * @brief Prints the compressor parameters to standard error.
+ * @param params - the compressor parameters to be printed.
+ * @param kmerLen - the k-mer length used in the compression process.
+ * @param anchorLen - the anchor length used in the compression process.
+ *
+ * This function outputs various parameters related to the compressor
+ * configuration, including file paths, thread count, k-mer and anchor
+ * lengths, and other settings that influence the compression process.
+ * The parameters are printed to standard error for debugging or logging
+ * purposes.
+ */
 void PrintParams(const CCompressorParams& params, uint32_t kmerLen, uint32_t anchorLen)
 {
 	std::cerr << " * * * * * * * * * * * * Parameters * * * * * * * * * * * * \n";

@@ -124,6 +124,21 @@ class CKmerFilter
 
 
 public:
+	/**
+	* @brief Constructs a k-mer filter using a specified k-mer database.
+	* @param kmcDbPath - path to the k-mer database file.
+	* @param modulo - modulo parameter for filtering k-mers.
+	 * @param kmer_len - the length of the k-mers to filter.
+	* @param tot_uniqe_kmers - total number of unique k-mers in the database.
+	* @param fill_factor_filtered_kmers - fill factor for the filtered k-mer structure.
+	 * @param verbose - flag indicating whether to enable verbose output.
+	 *
+	* This constructor initializes a k-mer filter by opening a k-mer database and
+	 * reading k-mers from it. It filters k-mers based on the modulo parameter and
+	 * maintains a count of the filtered k-mers. It also tracks progress during
+	* reading and optionally logs the total count of filtered k-mers if verbose output
+	* is enabled.
+	 */
 	explicit CKmerFilter(const std::string& kmcDbPath, uint32_t modulo, uint32_t kmer_len, uint64_t tot_uniqe_kmers, double fill_factor_filtered_kmers, bool verbose);
 
 	bool Possible(kmer_type kmer) const
