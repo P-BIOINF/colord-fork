@@ -481,13 +481,33 @@ static const char* SymbToBinMap = []() {
 	return _m;
 }();
 
+/**
+ * @brief Stores data in little-endian format in a buffer.
+ *
+ * @tparam T The type of data to be stored. It should be a trivially copyable type.
+ * @param buff Pointer to the buffer where the data will be stored.
+ * @param data The data to be stored in little-endian format.
+ *
+ * This function iterates through each byte of the input data and stores it into the
+ * specified buffer in little-endian order, where the least significant byte is stored first.
+ */
 template<typename T>
 void StoreLittleEndian(uint8_t* buff, const T& data)
-{	
-	for (uint32_t b = 0; b < sizeof(data); ++b)	
+{
+	for (uint32_t b = 0; b < sizeof(data); ++b)
 		*buff++ = data >> (8 * b);
 }
 
+/**
+ * @brief Stores data in little-endian format in a vector.
+ *
+ * @tparam T The type of data to be stored. It should be a trivially copyable type.
+ * @param buff Vector where the data will be stored.
+ * @param data The data to be stored in little-endian format.
+ *
+ * This function iterates through each byte of the input data and appends it to the
+ * specified vector in little-endian order, where the least significant byte is stored first.
+ */
 template<typename T>
 void StoreLittleEndian(std::vector<uint8_t>& buff, const T& data)
 {
@@ -495,27 +515,50 @@ void StoreLittleEndian(std::vector<uint8_t>& buff, const T& data)
 		buff.push_back(static_cast<uint8_t>(data >> (8 * b)));
 }
 
+/**
+ * @brief Stores a double value in little-endian format in a vector.
+ *
+ * This specialized template checks the system's endianness and stores the
+ * bytes of the double value in the appropriate order in the provided vector.
+ *
+ * @param buff Vector where the double value will be stored.
+ * @param data The double value to be stored.
+ */
 template<>
 inline void StoreLittleEndian<double>(std::vector<uint8_t>& buff, const double& data)
 {
+	// Determine system endianness at runtime
 	static bool isLittleEndian = [] {
 		int x = 1;
 		return *reinterpret_cast<uint8_t*>(&x) == 1;
-	}();
+		}();
+
 	if (isLittleEndian)
 	{
+		// Store bytes in little-endian order
 		auto ptr = reinterpret_cast<const uint8_t*>(&data);
 		for (uint32_t b = 0; b < sizeof(data); ++b)
 			buff.push_back(*ptr++);
 	}
 	else
 	{
+		// Store bytes in big-endian order
 		auto ptr = reinterpret_cast<const uint8_t*>(&data) + sizeof(data) - 1;
 		for (uint32_t b = 0; b < sizeof(data); ++b)
 			buff.push_back(*ptr--);
 	}
 }
 
+/**
+ * @brief Stores a value in little-endian format in an output stream.
+ *
+ * This template function takes a generic data type and writes its bytes
+ * in little-endian order to the provided output stream.
+ *
+ * @tparam T The type of the data to be stored.
+ * @param buff The output stream where the data will be written.
+ * @param data The data to be stored in little-endian format.
+ */
 template<typename T>
 void StoreLittleEndian(std::ostream& buff, const T& data)
 {
@@ -523,9 +566,19 @@ void StoreLittleEndian(std::ostream& buff, const T& data)
 	{
 		uint8_t byte = data >> (8 * b);
 		buff.write(reinterpret_cast<char*>(&byte), 1);
-	}		
+	}
 }
 
+/**
+ * @brief Loads a value from a byte array in little-endian format.
+ *
+ * This template function reads bytes from a byte array and reconstructs
+ * the original value by combining the bytes in little-endian order.
+ *
+ * @tparam T The type of the data to be loaded.
+ * @param buff Pointer to the byte array from which data will be read.
+ * @param data Reference to the variable where the loaded data will be stored.
+ */
 template<typename T>
 void LoadLittleEndian(const uint8_t* buff, T& data)
 {
@@ -537,13 +590,22 @@ void LoadLittleEndian(const uint8_t* buff, T& data)
 	}
 }
 
+/**
+ * @brief Loads a double value from a byte array in little-endian format.
+ *
+ * This specialization checks the system's endianness and loads the double
+ * value from the byte array in the appropriate order.
+ *
+ * @param buff Pointer to the byte array from which the double value will be read.
+ * @param data Reference to the variable where the loaded double value will be stored.
+ */
 template<>
 inline void LoadLittleEndian<double>(const uint8_t* buff, double& data)
 {
 	static bool isLittleEndian = [] {
 		int x = 1;
 		return *reinterpret_cast<uint8_t*>(&x) == 1;
-	}();
+		}();
 	if (isLittleEndian)
 	{
 		auto ptr = reinterpret_cast<uint8_t*>(&data);
@@ -558,12 +620,32 @@ inline void LoadLittleEndian<double>(const uint8_t* buff, double& data)
 	}
 }
 
+/**
+ * @brief Loads a value from a vector of bytes in little-endian format.
+ *
+ * This template function reads bytes from a vector and reconstructs the
+ * original value by combining the bytes in little-endian order.
+ *
+ * @tparam T The type of the data to be loaded.
+ * @param buff The vector of bytes from which data will be read.
+ * @param data Reference to the variable where the loaded data will be stored.
+ */
 template<typename T>
 void LoadLittleEndian(const std::vector<uint8_t>& buff, T& data)
-{	
-	LoadLittleEndian(buff.data(), data);	
+{
+	LoadLittleEndian(buff.data(), data);
 }
 
+/**
+ * @brief Loads a value from an input stream in little-endian format.
+ *
+ * This template function reads bytes from an input stream and reconstructs
+ * the original value by combining the bytes in little-endian order.
+ *
+ * @tparam T The type of the data to be loaded.
+ * @param buff The input stream from which data will be read.
+ * @param data Reference to the variable where the loaded data will be stored.
+ */
 template<typename T>
 void LoadLittleEndian(std::istream& buff, T& data)
 {
@@ -572,8 +654,8 @@ void LoadLittleEndian(std::istream& buff, T& data)
 	{
 		uint8_t byte;
 		buff.read((char*)&byte, 1);
-		data += (uint64_t)byte << (8 * b);	
-	}	
+		data += (uint64_t)byte << (8 * b);
+	}
 }
 
 std::ifstream inOpenOrDie(const std::string& path, std::ios_base::openmode mode = std::ios_base::in);
