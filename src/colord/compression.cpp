@@ -343,25 +343,34 @@ void adjustMemorySparseMode(
 
 void runCompression(const CCompressorParams& params, CInfo& info)
 {
+	// Assign version information to the info structure
 	info.version_major = version_major;
 	info.version_minor = version_minor;
 	info.version_patch = version_patch;
+
+	// Initialize a timer to track the total execution time
 	Timer total_timer;
 	total_timer.Start();
 
+	// Create an archive for output data, setting it to not compress
 	CArchive archive(false);
 
+	// Open the specified archive file; exit if the operation fails
 	if (!archive.Open(params.outputFilePath))
 	{
 		std::cerr << "Error: cannot open archive: " << params.outputFilePath << "\n";
 		exit(1);
 	}
-	
+
+	// Register a stream for metadata in the archive
 	int s_meta = archive.RegisterStream("meta");
 
+	// Check if the input file is in gzip format
 	bool is_gzip_input = izGzipFile(params.inputFilePath);
+	// Check if the input file is in FASTQ format
 	bool is_fastq = isFastq(params.inputFilePath);
 
+	// Verbose output for input type
 	if (params.verbose)
 	{
 		if (is_gzip_input)
@@ -369,115 +378,158 @@ void runCompression(const CCompressorParams& params, CInfo& info)
 		else
 			std::cerr << "input is not gzipped\n";
 	}
+
+	// Determine the number of threads for reading input based on the input type
 	uint32_t input_reader_threads = is_gzip_input;
+	// Calculate threads for entropy compression based on FASTQ mode
 	uint32_t entropy_compr_threads = 1 + (is_fastq && params.qualityComprMode != QualityComprMode::None);
 
-	uint32_t similarity_threads = 1; 
+	// Set similarity threads to 1
+	uint32_t similarity_threads = 1;
 
+	// Calculate the number of compression threads, ensuring at least one is used
 	int n_compression_threads = params.nThreads - input_reader_threads - entropy_compr_threads - similarity_threads;
 	if (n_compression_threads < 1)
 		n_compression_threads = 1;
 
+	// Adjust compression threads based on total thread count and input type
 	if (params.nThreads < 20)
 	{
 		if (is_fastq)
-			n_compression_threads += 2;
+			n_compression_threads += 2; // Additional threads for FASTQ
 		else
-			n_compression_threads += 1;
+			n_compression_threads += 1; // One additional thread for non-FASTQ
 	}
 
-
+	// Get k-mer and anchor lengths from parameters
 	uint32_t kmerLen = params.kmerLen;
 	uint32_t anchorLen = params.anchorLen;
 
+	// Adjust k-mer and anchor lengths based on input type and file
 	adjustKmerAndAnchorLen(kmerLen, anchorLen, is_gzip_input, is_fastq, params.inputFilePath);
-	if (params.verbose)	
-		PrintParams(params, kmerLen, anchorLen);	
+	if (params.verbose)
+		PrintParams(params, kmerLen, anchorLen); // Print parameters if verbose mode is enabled
 
+	// Create a temporary directory for intermediate files
 	auto tmp_dir_path = create_tmp_dir(std::filesystem::path(params.outputFilePath).remove_filename().string());
 
+	// Construct the path for the k-mers database
 	std::string kmersDbPath = (std::filesystem::path(tmp_dir_path) / std::filesystem::path(params.inputFilePath).filename()).string() + "." + std::to_string(kmerLen) + "mers";
-	
+
+	// Check if a reference genome path is provided
 	bool ref_genome_available = params.refGenomePath != "";
-	
+
+	// Initialize the input path for KMC
 	std::string kmcInputPath = params.inputFilePath;
 	std::unique_ptr<CReferenceGenome> ref_genome;
-	
+
+	// Set overlap size for reference genome processing
 	uint32_t ref_genome_overlap_size = (kmerLen - 1) * 10;
 	uint32_t ref_genome_read_len{};
+
+	// If a reference genome is available, initialize it and store required data
 	if (ref_genome_available)
 	{
-		bool calc_checksum = !params.storeRefGenome;
+		bool calc_checksum = !params.storeRefGenome; // Determine if checksum calculation is needed
 		ref_genome = std::make_unique<CReferenceGenome>(params.refGenomePath, ref_genome_overlap_size, calc_checksum, params.verbose);
-		std::string refGenomeKmcPath = "refGen.fa";
-		if(is_fastq)
+		std::string refGenomeKmcPath = "refGen.fa"; // Default file name for reference genome
+
+		// Adjust file extension based on input format
+		if (is_fastq)
 			refGenomeKmcPath = "refGen.fq";
 
+		// Create full path for the reference genome KMC file
 		refGenomeKmcPath = (std::filesystem::path(tmp_dir_path) / std::filesystem::path(refGenomeKmcPath)).string();
-		ref_genome->Store(refGenomeKmcPath, is_fastq);
-		if(params.storeRefGenome)
+		ref_genome->Store(refGenomeKmcPath, is_fastq); // Store reference genome
+
+		// If storing reference genome, also store it in the archive
+		if (params.storeRefGenome)
 			ref_genome->Store(archive);
+
+		// Prepare a new input path for KMC processing
 		std::string newKmcInputPath = (std::filesystem::path(tmp_dir_path) / std::filesystem::path("kmc_file_list.txt")).string();
-		std::ofstream newKmcInput(newKmcInputPath);
+		std::ofstream newKmcInput(newKmcInputPath); // Open file for writing KMC input paths
+
+		// Exit if the file cannot be opened
 		if (!newKmcInput)
 		{
 			std::cerr << "Error: cannot open file: " << newKmcInputPath << "\n";
 			exit(1);
 		}
-		newKmcInput << kmcInputPath << "\n";
-		newKmcInput << refGenomeKmcPath << "\n";
-		kmcInputPath = "@" + newKmcInputPath;
+		newKmcInput << kmcInputPath << "\n"; // Write input path
+		newKmcInput << refGenomeKmcPath << "\n"; // Write reference genome path
+		kmcInputPath = "@" + newKmcInputPath; // Prefix the new input path
 	}
 
+	// Initialize the k-mer counter with parameters
 	CKmerCounter kmer_counter(kmerLen, params.minKmerCount, params.maxKmerCount, params.nThreads, params.filterHashModulo, kmcInputPath, kmersDbPath, tmp_dir_path, is_fastq, params.verbose);
+	// Get the total number of reads processed
 	auto tot_n_reads = kmer_counter.GetNReads();
-	
+
+	// Get the total number of k-mers from the k-mer counter
 	auto tot_kmers = kmer_counter.GetTotKmers();
+	// Get the number of unique counted k-mers
 	auto n_uniq_counted_kmers = kmer_counter.GetNUniqueCounted();
 	std::cerr << "\n";
-	if(params.verbose)
+
+	// Verbose output for total k-mers and unique counted k-mers
+	if (params.verbose)
 	{
 		std::cerr << "tot k-mers: " << tot_kmers << "\n";
 		std::cerr << "n uniq counted: " << n_uniq_counted_kmers << "\n";
 	}
+
+	// Calculate the mean read length based on total k-mers and total reads
 	uint64_t mean_read_len = static_cast<uint64_t>((double(tot_kmers * params.filterHashModulo) / tot_n_reads + kmerLen - 1));
 
-	if (ref_genome_available) //correct stats if ref. genome is used
-	{		
+	// If a reference genome is available, adjust statistics accordingly
+	if (ref_genome_available)
+	{
+		// Adjust mean read length considering the reference genome
 		mean_read_len = double(mean_read_len * tot_n_reads - ref_genome->GetTotSeqsLen()) / (tot_n_reads - ref_genome->GetTotNSeqs());
+		// Update the total number of reads after accounting for the reference genome sequences
 		tot_n_reads -= ref_genome->GetTotNSeqs();
 
+		// Set the read length for the reference genome
 		ref_genome_read_len = 20 * mean_read_len;
-
 		ref_genome->SetReadLen(ref_genome_read_len);
 	}
 
+	// Store the total number of reads in the info structure
 	info.total_reads = tot_n_reads;
 
+	// Verbose output for approximate average read length
 	if (params.verbose)
 		std::cerr << "approx. avg. read len: " << mean_read_len << "\n";
 
+	// Initialize a timer for filtering k-mers
 	Timer timer;
-
 	std::cerr << "Filtering k-mers.\n";
 	timer.Start();
+
+	// Create a k-mer filter with specified parameters
 	CKmerFilter filtered_kmers(kmersDbPath, params.filterHashModulo, kmerLen, n_uniq_counted_kmers, params.fillFactorFilteredKmers, params.verbose);
+
+	// Attempt to remove the temporary directory and handle any errors
 	std::error_code ec;
 	std::filesystem::remove_all(tmp_dir_path, ec);
 	if (ec)
 	{
 		std::cerr << "Warning: cannot remove tmp dir: " << tmp_dir_path << "\n";
 	}
-	//std::cerr << "Done.\n";
-	if(params.verbose)
+
+	// Log the filtering time if verbose mode is enabled
+	if (params.verbose)
 		timer.Log(std::cerr);
 
+	// Set the sizes for various queues used in processing
 	uint32_t edit_script_for_qual_queue_size = 2 * n_compression_threads;
 	uint32_t compressed_queue_size = 2 * n_compression_threads;
 
-	CQueueMonitor queue_monitor(std::cerr, false, true);		// output_stream, single_line, report
-//	CQueueMonitor queue_monitor(std::cerr, false, false);		// output_stream, single_line, report
+	// Create a queue monitor for tracking the status of multiple queues
+	CQueueMonitor queue_monitor(std::cerr, false, true); // output_stream, single_line, report
 
+	// Register various queues for monitoring
 	queue_monitor.register_queue(0, "reads_queue", reads_queue_size);
 	queue_monitor.register_queue(1, "quals_queue", quals_queue_size);
 	queue_monitor.register_queue(2, "headers_queue", headers_queue_size);
@@ -485,236 +537,310 @@ void runCompression(const CCompressorParams& params, CInfo& info)
 	queue_monitor.register_queue(4, "compress_queue", compress_queue_size);
 	queue_monitor.register_queue(5, "compressed_queue", compressed_queue_size);
 
+	// Initialize parallel queues for reads, qualities, and headers
 	CParallelQueue<read_pack_t> reads_queue(reads_queue_size, 1, &queue_monitor, 0);
 	CParallelQueue<qual_pack_t> quals_queue(quals_queue_size, 1, &queue_monitor, 1);
 	CParallelQueue<header_pack_t> headers_queue(headers_queue_size, 1, &queue_monitor, 2);
 
-//	CParallelQueue<std::vector<es_t>> edit_script_for_qual_queue(edit_script_for_qual_queue_size, 1, &queue_monitor, 3);
+	//	CParallelQueue<std::vector<es_t>> edit_script_for_qual_queue(edit_script_for_qual_queue_size, 1, &queue_monitor, 3);
+		// Create a parallel priority queue for storing edit scripts related to quality
 	CParallelPriorityQueue<std::vector<es_t>> edit_script_for_qual_queue(edit_script_for_qual_queue_size, n_compression_threads, &queue_monitor, 3);
 
+	// Create a queue that pops items for compression, waiting if necessary
 	CParallelQueuePopWaiting<CCompressPack> compress_queue(compress_queue_size, &queue_monitor, 4);
-	
+
+	// Create a parallel priority queue for compressed k-mers
 	CParallelPriorityQueue<std::vector<es_t>> compressed_queue(compressed_queue_size, n_compression_threads, &queue_monitor, 5);
 
+	// Store the total number of reference reads
 	uint32_t tot_ref_reads = tot_n_reads;
-	
+
+	// Calculate the range for sparse mode based on various parameters
 	uint32_t sparseMode_range = static_cast<uint32_t>((params.sparseMode_range_symbols * n_uniq_counted_kmers * params.filterHashModulo) / mean_read_len);
-	if (sparseMode_range == 0)
+	if (sparseMode_range == 0) // Ensure sparse mode range is at least 1
 		sparseMode_range = 1;
+
+	// Get the sparse mode exponent from parameters
 	double sparseMode_exponent = params.sparseMode_exponent;
 
+	// Get the fill factor for k-mers to reads from parameters
 	double fill_factor_kmers_to_reads = params.fillFactorKmersToReads;
 
+	// Get the number of pseudo reads from the reference genome if available
 	uint32_t n_ref_genome_pseudo_reads = ref_genome_available ? ref_genome->GetNPseudoReads() : 0;
 
+	// Verbose output for the number of reference genome pseudo reads
 	if (params.verbose && ref_genome_available)
 		std::cerr << "# ref genome pseudo reads: " << n_ref_genome_pseudo_reads << "\n";
 
+	// Update total reference reads to include pseudo reads
 	tot_ref_reads += n_ref_genome_pseudo_reads;
 
+	// Adjust settings based on the reference reads mode
 	if (params.referenceReadsMode == ReferenceReadsMode::Sparse)
 	{
+		// Calculate the approximate size of queues
 		auto queuesApproxSize = calcQueuesSize(is_fastq, edit_script_for_qual_queue_size, compressed_queue_size, n_compression_threads,
 			mean_read_len, params.maxCandidates, params.verbose);
+
+		// Adjust memory settings for sparse mode based on calculated values
 		adjustMemorySparseMode(params, filtered_kmers, filtered_kmers.GetTotalKmers(), tot_n_reads, n_ref_genome_pseudo_reads, mean_read_len, queuesApproxSize,
 			sparseMode_range, sparseMode_exponent, fill_factor_kmers_to_reads);
+
 #ifdef ESTIMATE_MEMORY_WITH_COUNTS_PER_PREFIX
+		// Release counts per prefix if memory estimation is used
 		filtered_kmers.ReleaseCountsPerPrefix();
 #endif
+
+		// Verbose output for adjusted memory settings
 		if (params.verbose)
 		{
 			std::cerr << "adjusted memory related settings:\n";
 			std::cerr << "\tfill_factor_kmers_to_reads: " << fill_factor_kmers_to_reads << "\n";
 			std::cerr << "\tsparseMode_range: " << sparseMode_range << "\n";
 			std::cerr << "\tsparseMode_exponent: " << sparseMode_exponent << "\n";
-
 		}
 	}
 
+	// Initialize a reference reads accepter for managing accepted reference reads
 	CRefReadsAccepter ref_reads_accepter(sparseMode_range, sparseMode_exponent, n_ref_genome_pseudo_reads);
 	if (params.referenceReadsMode == ReferenceReadsMode::Sparse)
 	{
-		if(params.verbose)
+		if (params.verbose)
 			std::cerr << "sparse mode range in reads: " << sparseMode_range << "\n";
+		// Get the total number of accepted reference reads
 		tot_ref_reads = ref_reads_accepter.GetNAccepted(tot_n_reads);
 	}
 
+	// Initialize a reference reads object with the total number of reference reads
 	CReferenceReads reference_reads(tot_ref_reads);
 
+	// Initialize a time collector to measure input reading times
 	CTimeCollector tc(is_fastq);
 
+	// Variable to hold the total symbol header count
 	uint64_t total_symb_header;
-	std::thread reader([&params, &reads_queue, &quals_queue, &headers_queue, &tc, &info, &total_symb_header]{
+
+	// Create a thread to read input data
+	std::thread reader([&params, &reads_queue, &quals_queue, &headers_queue, &tc, &info, &total_symb_header] {
 #ifdef MEASURE_THREADS_TIMES
+		// Start timing for thread execution
 		CThreadWatch tw;
 		tw.startTimer();
 #endif
 
+		// Initialize input reads object and gather statistics
 		CInputReads reads(params.verbose, params.inputFilePath, reads_queue, quals_queue, headers_queue);
 		reads.GetStats(info.total_bytes, info.total_bases, total_symb_header);
 
 #ifdef MEASURE_THREADS_TIMES
+		// Stop timing and record the elapsed time for input reads
 		tw.stopTimer();
 		tc.inputReads = tw.getElapsedTime();
 #endif
 
-	});
-	
+		});
 
-	std::thread similarity_finder([&reads_queue, &compress_queue, &reference_reads, &ref_genome, &filtered_kmers, &params, kmerLen,
-		&ref_reads_accepter, tot_n_reads, tot_ref_reads, &tc, n_compression_threads, &fill_factor_kmers_to_reads]{
+	// Create a thread for finding similarities in reads
+	std::thread similarity_finder([&reads_queue, &compress_queue, &reference_reads, &ref_genome, &filtered_kmers, &params, kmerLen, &ref_reads_accepter, tot_n_reads, tot_ref_reads, &tc, n_compression_threads, &fill_factor_kmers_to_reads] 
+		{
 #ifdef MEASURE_THREADS_TIMES
-		CThreadWatch tw;
-		tw.startTimer();
-#endif
-
-		//replace with nothing for debug purposes :)
-		//read_pack_t p;
-		//while (reads_queue.Pop(p))
-		//	;
-		//compress_queue.MarkCompleted();
-
-		CReadsSimilarityGraph sim_graph(reads_queue, compress_queue, reference_reads, ref_genome.get(), filtered_kmers, 
-			kmerLen, params.maxCandidates, params.maxKmerCount, params.referenceReadsMode, ref_reads_accepter,
-			(double)tot_ref_reads/tot_n_reads, n_compression_threads, params.dataSource, fill_factor_kmers_to_reads, params.verbose);
-
-#ifdef MEASURE_THREADS_TIMES
-		tw.stopTimer();
-		tc.similarity_finder = tw.getElapsedTime();
-		tc.similarity_finder_internal = std::move(sim_graph.GetTwTimes());
-#endif
-	});
-	
-	std::vector<thread> encoders;
-#ifdef MEASURE_THREADS_TIMES
-	tc.encodersWaitOnQueueTime.resize(n_compression_threads);
-#endif
-	for (uint32_t i = 0; i < static_cast<uint32_t>(n_compression_threads); ++i)
-		encoders.emplace_back([&compress_queue, &reference_reads, &compressed_queue, &edit_script_for_qual_queue, &params, anchorLen, &tc, i, is_fastq, kmerLen] {
-#ifdef MEASURE_THREADS_TIMES
+			// Start timing for the similarity finder thread
 			CThreadWatch tw;
 			tw.startTimer();
 #endif
 
-			//replace with nothing for debug purposes :)
-			//CCompressPack p;
-			//while (compress_queue.Pop(p))
-			//	;
-			//compressed_queue.MarkCompleted();
+			// Uncomment this section for debugging to ensure reads are processed correctly
+			//read_pack_t p;
+			//while (reads_queue.Pop(p))
+			//    ;
+			//compress_queue.MarkCompleted();
 
-			CEncoder encoder(params.verbose, compress_queue, reference_reads, compressed_queue, edit_script_for_qual_queue, anchorLen,
-			params.minFractionOfMmersInEncodeToAlwaysEncode, 
+			// Create a similarity graph to analyze the similarities between reads
+			CReadsSimilarityGraph sim_graph(reads_queue, compress_queue, reference_reads, ref_genome.get(), filtered_kmers,
+				kmerLen, params.maxCandidates, params.maxKmerCount, params.referenceReadsMode, ref_reads_accepter,
+				(double)tot_ref_reads / tot_n_reads, n_compression_threads, params.dataSource, fill_factor_kmers_to_reads, params.verbose);
+
+#ifdef MEASURE_THREADS_TIMES
+			// Stop timing and record elapsed time for similarity finding
+			tw.stopTimer();
+			tc.similarity_finder = tw.getElapsedTime();
+			tc.similarity_finder_internal = std::move(sim_graph.GetTwTimes());
+#endif
+		});
+
+	// Vector to hold encoder threads
+	std::vector<std::thread> encoders;
+
+#ifdef MEASURE_THREADS_TIMES
+	// Resize to track waiting time on queue for each encoder
+	tc.encodersWaitOnQueueTime.resize(n_compression_threads);
+#endif
+
+	// Create encoder threads to process compression
+	for (uint32_t i = 0; i < static_cast<uint32_t>(n_compression_threads); ++i)
+		encoders.emplace_back([&compress_queue, &reference_reads, &compressed_queue, &edit_script_for_qual_queue, &params, anchorLen, &tc, i, is_fastq, kmerLen] {
+#ifdef MEASURE_THREADS_TIMES
+		// Start timing for each encoder thread
+		CThreadWatch tw;
+		tw.startTimer();
+#endif
+
+		// Uncomment this section for debugging to ensure compression works correctly
+		//CCompressPack p;
+		//while (compress_queue.Pop(p))
+		//    ;
+		//compressed_queue.MarkCompleted();
+
+		// Create an encoder for compressing reads
+		CEncoder encoder(params.verbose, compress_queue, reference_reads, compressed_queue, edit_script_for_qual_queue, anchorLen,
+			params.minFractionOfMmersInEncodeToAlwaysEncode,
 			params.minFractionOfMmersInEncode,
 			params.maxMatchesMultiplier,
 			params.editScriptCostMultiplier,
 			params.minPartLenToConsiderAltRead,
-			params.maxRecurence,			
+			params.maxRecurence,
 			params.minAnchors,
 			is_fastq,
 			params.filterHashModulo,
 			kmerLen,
 			params.dataSource);
-			
-			encoder.Encode();
+
+		// Execute the encoding process
+		encoder.Encode();
 
 #ifdef MEASURE_THREADS_TIMES
-			tc.encodersWaitOnQueueTime[i] = encoder.GetWaitOnQueueTime();
-			tw.stopTimer();
-			tc.RegisterNewEncoderTime(tw.getElapsedTime());
+		// Record the waiting time for the current encoder
+		tc.encodersWaitOnQueueTime[i] = encoder.GetWaitOnQueueTime();
+		tw.stopTimer();
+		// Register the elapsed time for the encoder thread
+		tc.RegisterNewEncoderTime(tw.getElapsedTime());
 #endif
-	});
+			});
 
-
-
+	// Create a thread for the entropy compression process
 	std::thread entropy_compressor([&reference_reads, &params, &compressed_queue, &archive, tot_n_reads, mean_read_len, n_ref_genome_pseudo_reads, &tc] {
 #ifdef MEASURE_THREADS_TIMES
+		// Start timing for the entropy compressor thread
 		CThreadWatch tw;
 		tw.startTimer();
 #endif
 
-		//replace with nothing for debug purposes :)
+		// Uncomment this section for debugging to ensure compressed data is processed correctly
 		//std::vector<es_t> p;
 		//while (compressed_queue.Pop(p))
-		//	;
+		//    ;
 
+		// Create an entropy compressor for handling the compressed reads
 		CEntrComprReads compr{ compressed_queue, reference_reads, params.verbose, params.maxCandidates,
 			params.compressionLevel, tot_n_reads * mean_read_len, archive, tot_n_reads, n_ref_genome_pseudo_reads };
+
+		// Execute the compression process
 		compr.Compress();
 
 #ifdef MEASURE_THREADS_TIMES
+		// Stop timing and record elapsed time for entropy compression
 		tw.stopTimer();
 		tc.entropyCoder = tw.getElapsedTime();
 #endif
-	});
+		});
 
+	// Declare a thread for quality compression (implementation not shown yet)
 	std::thread entr_compr_qual;
-	
-	if (is_fastq)
-	{		
+
+	// Check if the input format is FASTQ
+	if (is_fastq) 
+	{
+		// Create a thread for quality compression if the format is FASTQ
 		entr_compr_qual = std::thread([&quals_queue, &archive, &params, &edit_script_for_qual_queue, tot_n_reads, mean_read_len, &tc] {
 #ifdef MEASURE_THREADS_TIMES
+			// Start timing for the quality compression thread
 			CThreadWatch tw;
 			tw.startTimer();
 #endif
 
+			// Create a quality compressor instance
 			CEntrComprQuals compr{ quals_queue, archive, params.qualityComprMode, params.qualityFwdThresholds, params.qualityRevThresholds, params.verbose, params.compressionLevel, tot_n_reads * mean_read_len, edit_script_for_qual_queue, params.dataSource };
+
+			// Execute the quality compression process
 			compr.Compress();
 
 #ifdef MEASURE_THREADS_TIMES
+			// Stop timing and record elapsed time for quality compression
 			tw.stopTimer();
 			tc.entropyCoderQual = tw.getElapsedTime();
 #endif
-		});
+			});
 	}
 
-	
-	std::thread entr_compr_header([&headers_queue, &archive, &params, &tc] {
+	// Thread for compressing headers
+	std::thread entr_compr_header([&headers_queue, &archive, &params, &tc] 
+		{
 #ifdef MEASURE_THREADS_TIMES
+		// Start timing for the header compression thread
 		CThreadWatch tw;
 		tw.startTimer();
 #endif
 
-
-		//replace with nothing for debug purposes :)
+		// Uncomment for debugging to ensure headers are processed correctly
 		//header_pack_t p;
 		//while (headers_queue.Pop(p))
-		//	;
+		//    ;
+
+		// Create a header compressor instance
 		CEntrComprHeaders compr{ headers_queue, archive, params.headerComprMode, params.compressionLevel, params.verbose };
-		compr.Compress();		
+
+		// Execute the header compression process
+		compr.Compress();
 
 #ifdef MEASURE_THREADS_TIMES
+		// Stop timing and record elapsed time for header compression
 		tw.stopTimer();
 		tc.entropyCoderHeader = tw.getElapsedTime();
 #endif
-	});
+		});
 
+	// Measure total time for subsequent operations
 #ifdef MEASURE_THREADS_TIMES
 	CThreadWatch tw;
 	tw.startTimer();
 #endif
 
+	// Wait for the quality compression thread to finish if processing FASTQ
 	if (is_fastq)
 		entr_compr_qual.join();
+
+	// Wait for the header compression thread to finish
 	entr_compr_header.join();
+	// Wait for the similarity finder thread to finish
 	similarity_finder.join();
+	// Wait for the reader thread to finish
 	reader.join();
+
+	// Wait for all encoder threads to finish
 	for (auto& th : encoders)
 		th.join();
+
+	// Wait for the entropy compressor thread to finish
 	entropy_compressor.join();
 
+	// Prepare a configuration vector for serialization
 	std::vector<uint8_t> _config;
+	// Store total reference reads and other parameters in little-endian format
 	StoreLittleEndian(_config, tot_ref_reads);
 	StoreLittleEndian(_config, params.maxCandidates);
 	StoreLittleEndian(_config, params.compressionLevel);
 	StoreLittleEndian(_config, static_cast<uint8_t>(params.dataSource));
 
+	// Store total number of reads multiplied by mean read length
 	StoreLittleEndian(_config, tot_n_reads * mean_read_len);
-	if(is_fastq)
+	if (is_fastq) 
 	{
+		// Store the quality compression mode
 		_config.push_back(static_cast<uint8_t>(params.qualityComprMode));
 
-		switch (params.qualityComprMode)
-		{
+		// Depending on the quality compression mode, store relevant thresholds
+		switch (params.qualityComprMode) {
 		case QualityComprMode::None:
 			assert(params.qualityRevThresholds.size() == 1);
 			StoreLittleEndian(_config, params.qualityRevThresholds[0]);
@@ -728,89 +854,101 @@ void runCompression(const CCompressorParams& params, CInfo& info)
 			break;
 		case QualityComprMode::QuadThreshold:
 			assert(params.qualityRevThresholds.size() == 4);
-			StoreLittleEndian(_config, params.qualityRevThresholds[0]);
-			StoreLittleEndian(_config, params.qualityRevThresholds[1]);
-			StoreLittleEndian(_config, params.qualityRevThresholds[2]);
-			StoreLittleEndian(_config, params.qualityRevThresholds[3]);
+			for (const auto& threshold : params.qualityRevThresholds)
+				StoreLittleEndian(_config, threshold);
 			break;
 		case QualityComprMode::QuinaryThreshold:
 			assert(params.qualityRevThresholds.size() == 5);
-			StoreLittleEndian(_config, params.qualityRevThresholds[0]);
-			StoreLittleEndian(_config, params.qualityRevThresholds[1]);
-			StoreLittleEndian(_config, params.qualityRevThresholds[2]);
-			StoreLittleEndian(_config, params.qualityRevThresholds[3]);
-			StoreLittleEndian(_config, params.qualityRevThresholds[4]);
+			for (const auto& threshold : params.qualityRevThresholds)
+				StoreLittleEndian(_config, threshold);
 			break;
 		case QualityComprMode::Average:
-			break;
 		case QualityComprMode::BinaryAverage:
-			break;
 		case QualityComprMode::QuadAverage:
 			break;
 		default:
 			break;
 		}
 	}
+	// Store header compression mode and reference reads mode
 	_config.push_back(static_cast<uint8_t>(params.headerComprMode));
 	_config.push_back(static_cast<uint8_t>(params.referenceReadsMode));
 
-	if (params.referenceReadsMode == ReferenceReadsMode::Sparse)
+	// If using sparse mode for reference reads, store additional parameters
+	if (params.referenceReadsMode == ReferenceReadsMode::Sparse) 
 	{
 		StoreLittleEndian(_config, sparseMode_range);
 		StoreLittleEndian(_config, sparseMode_exponent);
 	}
 
+	// Store the availability of the reference genome
 	_config.push_back(static_cast<uint8_t>(ref_genome_available));
-	if (ref_genome_available)
+
+	// Check if the reference genome is available
+	if (ref_genome_available) 
 	{
+		// Store the flag indicating whether to store the reference genome
 		_config.push_back(static_cast<uint8_t>(params.storeRefGenome));
+		// Store additional parameters related to the reference genome
 		StoreLittleEndian(_config, ref_genome_read_len);
 		StoreLittleEndian(_config, ref_genome_overlap_size);
 		StoreLittleEndian(_config, n_ref_genome_pseudo_reads);
-		
-		if (!params.storeRefGenome)
+
+		// If the reference genome is not being stored, calculate and store its checksum
+		if (!params.storeRefGenome) 
 		{
 			auto checksum = ref_genome->GetChecksum();
-			for (auto c : checksum)
+			for (auto c : checksum) 
 				StoreLittleEndian(_config, c);
 		}
 	}
 
+	// Add metadata part to the archive
 	archive.AddPart(s_meta, _config, 0);
 
+	// Register a new stream for additional information
 	int s_info = archive.RegisterStream("info");
+	// Serialize the info object into a byte vector
 	std::vector<uint8_t> _info = info.Serialize();
+	// Add the serialized info to the archive
 	archive.AddPart(s_info, _info, 0ull);
 
+	// Close the archive to finalize the writing process
 	archive.Close();
 
 #ifdef MEASURE_THREADS_TIMES
+	// Stop the timer and record the elapsed time for storing results
 	tw.stopTimer();
 	tc.storeResult = tw.getElapsedTime();
 
+	// If verbosity is enabled, print the timing report
+	if (params.verbose)
+		tc.PrintReport();
+#endif
+
+	// Print sizes of input streams before compression if verbosity is enabled
 	if (params.verbose) 
 	{
-		tc.PrintReport();
+		std::cerr << "Input stream sizes (before compression):\n";
+		std::cerr << "\tDNA size     : " << info.total_bases << "\n";
+		std::cerr << "\tHeader size  : " << total_symb_header << "\n";
 	}
-#endif
+
+	// Output sizes of different streams after compression
+	std::cerr << "DNA size        : " << archive.GetStreamPackedSize(archive.GetStreamId("dna")) << endl;
+	std::cerr << "Quality size    : " << archive.GetStreamPackedSize(archive.GetStreamId("qual")) << endl;
+	std::cerr << "Header size     : " << archive.GetStreamPackedSize(archive.GetStreamId("header")) << endl;
+	std::cerr << "Meta size       : " << archive.GetStreamPackedSize(archive.GetStreamId("meta")) << endl;
+	std::cerr << "Info size       : " << archive.GetStreamPackedSize(archive.GetStreamId("info")) << endl;
+
+	// Print the size of the reference genome if it's being stored
+	if (params.storeRefGenome) 
+		std::cerr << "Ref genome size : " << archive.GetStreamPackedSize(archive.GetStreamId("ref-genome")) << endl;
+
+	// Print memory usage information if verbosity is enabled
 	if (params.verbose)
-	{
-		cerr << "Input stream sizes (before compression):\n";
-		cerr << "\tDNA size     : " << info.total_bases << "\n";
-		cerr << "\tHeader size  : " << total_symb_header << "\n";
-	}
-	cerr << "DNA size        : " << archive.GetStreamPackedSize(archive.GetStreamId("dna")) << endl;
-	cerr << "Quality size    : " << archive.GetStreamPackedSize(archive.GetStreamId("qual")) << endl;
-	cerr << "Header size     : " << archive.GetStreamPackedSize(archive.GetStreamId("header")) << endl;
-	cerr << "Meta size       : " << archive.GetStreamPackedSize(archive.GetStreamId("meta")) << endl;
-	cerr << "Info size       : " << archive.GetStreamPackedSize(archive.GetStreamId("info")) << endl;
-	if(params.storeRefGenome)
-		cerr << "Ref genome size : " << archive.GetStreamPackedSize(archive.GetStreamId("ref-genome")) << endl;
-
-	if(params.verbose)
-	{
 		reference_reads.PrintMemoryUsage();
-	}
 
-	cerr << "Total time      : " << total_timer.GetTimeInSec() << "s\n";
+	// Print the total elapsed time for the process
+	std::cerr << "Total time      : " << total_timer.GetTimeInSec() << "s\n";
 }
